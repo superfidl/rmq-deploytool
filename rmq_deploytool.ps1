@@ -27,11 +27,31 @@ param(
     [string]$CAChainPath,
     [string]$ErlangCookieValue,
     [switch]$AllowInstallerDownload,
-    [string]$InstallerManifestPath = "C:\Delivery\RMQUpgrade\manifest.rmq_deploytool_installers.json",
-    [string]$OptionsManifestPath = "C:\Delivery\manifest.rmq_deploytool_options.json",
-    [string]$OfflineErlangInstallerPath = "C:\Delivery\RMQUpgrade\otp_win64_27.3.4.6.exe",
-    [string]$OfflineRabbitMQInstallerPath = "C:\Delivery\RMQUpgrade\rabbitmq-server-4.2.1.exe"
+    [string]$InstallerManifestPath,
+    [string]$OptionsManifestPath,
+    [string]$OfflineErlangInstallerPath,
+    [string]$OfflineRabbitMQInstallerPath
 )
+
+$scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Path $MyInvocation.MyCommand.Path -Parent }
+$deliveryRoot = $scriptRoot
+$deliveryUpgradeRoot = Join-Path $deliveryRoot "RMQUpgrade"
+
+if ([string]::IsNullOrWhiteSpace($InstallerManifestPath)) {
+    $InstallerManifestPath = Join-Path $deliveryUpgradeRoot "manifest.rmq_deploytool_installers.json"
+}
+
+if ([string]::IsNullOrWhiteSpace($OptionsManifestPath)) {
+    $OptionsManifestPath = Join-Path $deliveryRoot "manifest.rmq_deploytool_options.json"
+}
+
+if ([string]::IsNullOrWhiteSpace($OfflineErlangInstallerPath)) {
+    $OfflineErlangInstallerPath = Join-Path $deliveryUpgradeRoot "otp_win64_27.3.4.6.exe"
+}
+
+if ([string]::IsNullOrWhiteSpace($OfflineRabbitMQInstallerPath)) {
+    $OfflineRabbitMQInstallerPath = Join-Path $deliveryUpgradeRoot "rabbitmq-server-4.2.1.exe"
+}
 
 $script:RabbitMqBasePath = "C:\RabbitMQ"
 $script:ManageFirewallRules = $true
@@ -366,6 +386,50 @@ function Wait-LocalRabbitMqCliReady {
 
 }
 
+function Get-RabbitMqInstallRoots {
+
+    $roots = New-Object System.Collections.Generic.List[string]
+
+    if (-not [string]::IsNullOrWhiteSpace($env:RABBITMQ_SERVER)) {
+        $roots.Add($env:RABBITMQ_SERVER.TrimEnd('\'))
+    }
+
+    foreach ($programFilesPath in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+        if (-not [string]::IsNullOrWhiteSpace($programFilesPath)) {
+            $roots.Add((Join-Path $programFilesPath "RabbitMQ Server"))
+        }
+    }
+
+    try {
+        $rabbitMqService = Get-CimInstance -ClassName Win32_Service -Filter "Name='RabbitMQ'" -ErrorAction Stop
+        if ($rabbitMqService -and -not [string]::IsNullOrWhiteSpace($rabbitMqService.PathName)) {
+            $serviceCommandPath = $rabbitMqService.PathName.Trim()
+            if ($serviceCommandPath.StartsWith('"')) {
+                $serviceCommandPath = $serviceCommandPath.Trim('"')
+            }
+            else {
+                $serviceCommandPath = ($serviceCommandPath -split '\s+')[0]
+            }
+
+            $serviceCommandDirectory = Split-Path -Path $serviceCommandPath -Parent
+            if (-not [string]::IsNullOrWhiteSpace($serviceCommandDirectory)) {
+                $roots.Add($serviceCommandDirectory)
+                $roots.Add((Split-Path -Path $serviceCommandDirectory -Parent))
+            }
+        }
+    }
+    catch {
+    }
+
+    return @(
+        $roots |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        ForEach-Object { $_.TrimEnd('\') } |
+        Select-Object -Unique |
+        Where-Object { Test-Path -LiteralPath $_ }
+    )
+}
+
 function Resolve-RabbitMqCliPath {
     param(
         [Parameter(Mandatory)]
@@ -373,6 +437,7 @@ function Resolve-RabbitMqCliPath {
     )
 
     $candidates = @(
+        (Get-Command "$CommandName.cmd" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1),
         (Get-Command "$CommandName.bat" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1),
         (Get-Command $CommandName -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1)
     ) | Where-Object { $_ }
@@ -381,10 +446,11 @@ function Resolve-RabbitMqCliPath {
         return $candidates[0]
     }
 
-    $rabbitRoot = Join-Path $env:ProgramFiles "RabbitMQ Server"
-    if (Test-Path $rabbitRoot) {
-        $match = Get-ChildItem -Path $rabbitRoot -Recurse -File -Filter "$CommandName.bat" -ErrorAction SilentlyContinue |
-            Select-Object -ExpandProperty FullName -First 1
+    foreach ($rabbitRoot in Get-RabbitMqInstallRoots) {
+        $match = @(
+            Get-ChildItem -Path $rabbitRoot -Recurse -File -Filter "$CommandName.cmd" -ErrorAction SilentlyContinue
+            Get-ChildItem -Path $rabbitRoot -Recurse -File -Filter "$CommandName.bat" -ErrorAction SilentlyContinue
+        ) | Select-Object -ExpandProperty FullName -First 1
 
         if ($match) {
             return $match
@@ -1257,16 +1323,23 @@ function Invoke-RabbitMqUninstall {
 
 function Get-RabbitMqSbinPath {
 
-    $rabbitRoot = Join-Path $env:ProgramFiles "RabbitMQ Server"
-    if (-not (Test-Path -LiteralPath $rabbitRoot)) {
-        return $null
+    $candidates = foreach ($rabbitRoot in Get-RabbitMqInstallRoots) {
+        if ((Split-Path -Leaf $rabbitRoot) -eq "sbin" -and (Test-Path -LiteralPath $rabbitRoot)) {
+            $rabbitRoot
+            continue
+        }
+
+        if (Test-Path -LiteralPath (Join-Path $rabbitRoot "sbin")) {
+            Join-Path $rabbitRoot "sbin"
+        }
+
+        Get-ChildItem -Path $rabbitRoot -Directory -Filter "rabbitmq_server-*" -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending |
+            ForEach-Object { Join-Path $_.FullName "sbin" } |
+            Where-Object { Test-Path -LiteralPath $_ }
     }
 
-    return Get-ChildItem -Path $rabbitRoot -Directory -Filter "rabbitmq_server-*" -ErrorAction SilentlyContinue |
-        Sort-Object Name -Descending |
-        ForEach-Object { Join-Path $_.FullName "sbin" } |
-        Where-Object { Test-Path -LiteralPath $_ } |
-        Select-Object -First 1
+    return @($candidates | Select-Object -Unique | Select-Object -First 1)
 }
 
 function Get-RabbitMqBasePath {
