@@ -598,28 +598,49 @@ function New-RabbitMqTlsMaterialFromPfx {
         throw "Failed to open PFX '$PfxPath'. Verify that the file is valid and that -PfxPassword is correct."
     }
 
-    $certPem = "-----BEGIN CERTIFICATE-----`n"
-    $certPem += [Convert]::ToBase64String($cert.RawData, [System.Base64FormattingOptions]::InsertLineBreaks)
-    $certPem += "`n-----END CERTIFICATE-----"
-    Set-Content -Path $CertPath -Value $certPem -Encoding ascii
-
-    $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
-    if (-not $rsa) {
-        throw "The PFX does not contain an RSA private key. Use certificate mode 3 with PEM files for non-RSA certificates."
-    }
-
     try {
-        $keyBytes = $rsa.ExportPkcs8PrivateKey()
+        $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
+        if (-not $rsa) {
+            throw "The PFX does not contain an RSA private key. Use certificate mode 3 with PEM files for non-RSA certificates."
+        }
+
+        try {
+            $keyBytes = $rsa.ExportPkcs8PrivateKey()
+        }
+        catch {
+            throw "The PFX private key could not be exported. The certificate likely uses a non-exportable or provider-restricted private key. Use an exportable PFX or certificate mode 3 with PEM files."
+        }
+
+        if (-not $keyBytes -or $keyBytes.Length -eq 0) {
+            throw "The PFX private key export returned no data. Use an exportable PFX or certificate mode 3 with PEM files."
+        }
+
+        $certPem = "-----BEGIN CERTIFICATE-----`n"
+        $certPem += [Convert]::ToBase64String($cert.RawData, [System.Base64FormattingOptions]::InsertLineBreaks)
+        $certPem += "`n-----END CERTIFICATE-----"
+
+        $keyPem = "-----BEGIN PRIVATE KEY-----`n"
+        $keyPem += [Convert]::ToBase64String($keyBytes, [System.Base64FormattingOptions]::InsertLineBreaks)
+        $keyPem += "`n-----END PRIVATE KEY-----"
+
+        Set-Content -Path $CertPath -Value $certPem -Encoding ascii -ErrorAction Stop
+        Set-Content -Path $KeyPath -Value $keyPem -Encoding ascii -ErrorAction Stop
+    }
+    catch {
+        foreach ($path in @($CertPath, $KeyPath)) {
+            if (Test-Path -LiteralPath $path) {
+                Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        throw
     }
     finally {
-        $rsa.Dispose()
+        if ($rsa) {
+            $rsa.Dispose()
+        }
         $cert.Dispose()
     }
-
-    $keyPem = "-----BEGIN PRIVATE KEY-----`n"
-    $keyPem += [Convert]::ToBase64String($keyBytes, [System.Base64FormattingOptions]::InsertLineBreaks)
-    $keyPem += "`n-----END PRIVATE KEY-----"
-    Set-Content -Path $KeyPath -Value $keyPem -Encoding ascii
 }
 
 function Verify-RabbitCluster{
