@@ -390,11 +390,24 @@ function Get-RabbitMqInstallRoots {
 
     $roots = New-Object System.Collections.Generic.List[string]
 
-    if (-not [string]::IsNullOrWhiteSpace($env:RABBITMQ_SERVER)) {
-        $roots.Add($env:RABBITMQ_SERVER.TrimEnd('\'))
+    foreach ($rabbitMqServerPath in @(
+        $env:RABBITMQ_SERVER,
+        [Environment]::GetEnvironmentVariable("RABBITMQ_SERVER", "Machine"),
+        [Environment]::GetEnvironmentVariable("RABBITMQ_SERVER", "User")
+    )) {
+        if (-not [string]::IsNullOrWhiteSpace($rabbitMqServerPath)) {
+            $roots.Add($rabbitMqServerPath.TrimEnd('\'))
+        }
     }
 
-    foreach ($programFilesPath in @($env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+    foreach ($programFilesPath in @(
+        $env:ProgramFiles,
+        ${env:ProgramFiles(x86)},
+        $env:ProgramW6432,
+        [Environment]::GetEnvironmentVariable("ProgramFiles", "Machine"),
+        [Environment]::GetEnvironmentVariable("ProgramFiles(x86)", "Machine"),
+        [Environment]::GetEnvironmentVariable("ProgramW6432", "Machine")
+    )) {
         if (-not [string]::IsNullOrWhiteSpace($programFilesPath)) {
             $roots.Add((Join-Path $programFilesPath "RabbitMQ Server"))
         }
@@ -415,6 +428,67 @@ function Get-RabbitMqInstallRoots {
             if (-not [string]::IsNullOrWhiteSpace($serviceCommandDirectory)) {
                 $roots.Add($serviceCommandDirectory)
                 $roots.Add((Split-Path -Path $serviceCommandDirectory -Parent))
+            }
+        }
+    }
+    catch {
+    }
+
+    $uninstallRegistryPaths = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+
+    foreach ($registryPath in $uninstallRegistryPaths) {
+        try {
+            $entries = Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue |
+                Where-Object {
+                    $_.DisplayName -like "RabbitMQ Server*" -or $_.DisplayName -like "RabbitMQ*"
+                }
+
+            foreach ($entry in $entries) {
+                foreach ($candidate in @($entry.InstallLocation, $entry.DisplayIcon, $entry.UninstallString)) {
+                    if ([string]::IsNullOrWhiteSpace($candidate)) {
+                        continue
+                    }
+
+                    $normalizedCandidate = [string]$candidate
+                    if ($normalizedCandidate.StartsWith('"')) {
+                        $normalizedCandidate = $normalizedCandidate.Trim('"')
+                    }
+                    else {
+                        $normalizedCandidate = ($normalizedCandidate -split '\s+/|\s+-|\s+')[0]
+                    }
+
+                    if ([string]::IsNullOrWhiteSpace($normalizedCandidate)) {
+                        continue
+                    }
+
+                    if (Test-Path -LiteralPath $normalizedCandidate -PathType Leaf) {
+                        $normalizedCandidate = Split-Path -Path $normalizedCandidate -Parent
+                    }
+
+                    if (-not [string]::IsNullOrWhiteSpace($normalizedCandidate)) {
+                        $roots.Add($normalizedCandidate.TrimEnd('\'))
+                        try {
+                            $roots.Add((Split-Path -Path $normalizedCandidate -Parent))
+                        }
+                        catch {
+                        }
+                    }
+                }
+            }
+        }
+        catch {
+        }
+    }
+
+    try {
+        $fixedDrives = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction Stop
+        foreach ($drive in $fixedDrives) {
+            if (-not [string]::IsNullOrWhiteSpace($drive.DeviceID)) {
+                $roots.Add((Join-Path $drive.DeviceID "Program Files\RabbitMQ Server"))
+                $roots.Add((Join-Path $drive.DeviceID "Program Files (x86)\RabbitMQ Server"))
             }
         }
     }
@@ -1431,6 +1505,17 @@ function Add-RabbitMqSbinToPath {
     Write-Host "Updated machine PATH to current RabbitMQ sbin path: $sbinPath"
 }
 
+function Sync-RabbitMqSbinPathSafely {
+
+    try {
+        Add-RabbitMqSbinToPath
+    }
+    catch {
+        Write-Warning "Failed to update RabbitMQ sbin in machine PATH: $($_.Exception.Message)"
+        Write-Warning "Continuing because RabbitMQ CLI resolution does not rely only on PATH."
+    }
+}
+
 function Remove-RabbitMqSbinFromPath {
 
     $entries = Get-MachinePathEntries
@@ -1794,13 +1879,13 @@ if($DeployMode -eq "6"){
     -AdminCredential $credentialRabbitMQAdmin `
     -Verbose
 
-    Add-RabbitMqSbinToPath
+    Sync-RabbitMqSbinPathSafely
 
 }
 elseif($ReapplyOnly){
 
     Write-Host "Reapply-only mode selected; skipping install/upgrade"
-    Add-RabbitMqSbinToPath
+    Sync-RabbitMqSbinPathSafely
 
 }
 elseif($DeployMode -eq "3"){
@@ -1813,7 +1898,7 @@ elseif($DeployMode -eq "3"){
 
     Start-Process $OfflineRabbitMQInstallerPath -ArgumentList "/S" -Wait
 
-    Add-RabbitMqSbinToPath
+    Sync-RabbitMqSbinPathSafely
 
     Start-Service RabbitMQ
 
@@ -1833,7 +1918,7 @@ elseif(-not $RabbitService){
     -AdminCredential $credentialRabbitMQAdmin `
     -Verbose
 
-    Add-RabbitMqSbinToPath
+    Sync-RabbitMqSbinPathSafely
 
 }
 else{
