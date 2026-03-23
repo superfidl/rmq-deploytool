@@ -1,0 +1,18 @@
+{
+  "erlang": {
+    "file": "otp_win64_27.3.4.6.exe",
+    "version": "27.3.4.6",
+    "hash_type": "SHA256",
+    "hash": "57958A26DAB596A6528F47DA04A500A5207DE0FDA5E24ABAC7BAA002ECA0F664",
+    "download_url": "https://downloads.marketplace.delinea.com/integrations/Downloads/Erlang/27.3.4.6/otp_win64_27.3.4.6.exe",
+    "source": "Delinea official Erlang download source"
+  },
+  "rabbitmq": {
+    "file": "rabbitmq-server-4.2.1.exe",
+    "version": "4.2.1",
+    "hash_type": "SHA256",
+    "hash": "F953A926F8DB5152B82976F5E39B173D8EB96B148356B5B5D0DA0441ECD93E99",
+    "download_url": "https://downloads.marketplace.delinea.com/integrations/Downloads/RabbitMQServer/4.2.1/rabbitmq-server-4.2.1.exe",
+    "source": "Delinea official RabbitMQ download source"
+  }
+}

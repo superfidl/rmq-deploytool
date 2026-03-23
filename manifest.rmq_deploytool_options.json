@@ -1,0 +1,36 @@
+{
+  "rabbitmq_base_path": "C:\\RabbitMQ",
+  "manage_firewall_rules": true,
+  "update_rabbitmq_sbin_path": true,
+  "_management_allowed_sources_help": "Use a JSON array of source IPs or CIDR ranges for management ports 15672/15671. Bare IPs are treated as /32 automatically. Default is localhost only.",
+  "management_allowed_sources": [
+    "127.0.0.1"
+  ],
+  "_prometheus_allowed_sources_help": "Use a JSON array of source IPs or CIDR ranges for TCP 15692. Bare IPs are treated as /32 automatically. Examples: 127.0.0.1, 172.20.0.0/16, 172.21.1.1/32",
+  "prometheus_allowed_sources": [
+    "127.0.0.1"
+  ],
+  "_amqp_allowed_sources_help": "Use a JSON array of source IPs or CIDR ranges for AMQP ports 5672/5671. Use \"Any\" to allow all sources. Bare IPs are treated as /32 automatically.",
+  "amqp_allowed_sources": [
+    "Any"
+  ],
+  "_cluster_allowed_sources_help": "Use a JSON array of cluster node IPs or CIDR ranges for EPMD and inter-node ports 4369/25672. Use \"Any\" to allow all sources. Bare IPs are treated as /32 automatically.",
+  "cluster_allowed_sources": [
+    "Any"
+  ],
+  "enable_plugins": [
+    "rabbitmq_management",
+    "rabbitmq_shovel",
+    "rabbitmq_shovel_management",
+    "rabbitmq_prometheus"
+  ],
+  "ports": {
+    "amqp_tcp": 5672,
+    "amqp_tls": 5671,
+    "management_tcp": 15672,
+    "management_tls": 15671,
+    "prometheus": 15692,
+    "epmd": 4369,
+    "distribution": 25672
+  }
+}
