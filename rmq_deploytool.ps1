@@ -27,31 +27,11 @@ param(
     [string]$CAChainPath,
     [string]$ErlangCookieValue,
     [switch]$AllowInstallerDownload,
-    [string]$InstallerManifestPath,
-    [string]$OptionsManifestPath,
-    [string]$OfflineErlangInstallerPath,
-    [string]$OfflineRabbitMQInstallerPath
+    [string]$InstallerManifestPath = "D:\Delivery\rmq-deploytool-main\RMQUpgrade\manifest.rmq_deploytool_installers.json",
+    [string]$OptionsManifestPath = "D:\Delivery\rmq-deploytool-main\manifest.rmq_deploytool_options.json",
+    [string]$OfflineErlangInstallerPath = "D:\Delivery\rmq-deploytool-main\RMQUpgrade\otp_win64_27.3.4.6.exe",
+    [string]$OfflineRabbitMQInstallerPath = "D:\Delivery\rmq-deploytool-main\RMQUpgrade\rabbitmq-server-4.2.1.exe"
 )
-
-$scriptRoot = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Path $MyInvocation.MyCommand.Path -Parent }
-$deliveryRoot = $scriptRoot
-$deliveryUpgradeRoot = Join-Path $deliveryRoot "RMQUpgrade"
-
-if ([string]::IsNullOrWhiteSpace($InstallerManifestPath)) {
-    $InstallerManifestPath = Join-Path $deliveryUpgradeRoot "manifest.rmq_deploytool_installers.json"
-}
-
-if ([string]::IsNullOrWhiteSpace($OptionsManifestPath)) {
-    $OptionsManifestPath = Join-Path $deliveryRoot "manifest.rmq_deploytool_options.json"
-}
-
-if ([string]::IsNullOrWhiteSpace($OfflineErlangInstallerPath)) {
-    $OfflineErlangInstallerPath = Join-Path $deliveryUpgradeRoot "otp_win64_27.3.4.6.exe"
-}
-
-if ([string]::IsNullOrWhiteSpace($OfflineRabbitMQInstallerPath)) {
-    $OfflineRabbitMQInstallerPath = Join-Path $deliveryUpgradeRoot "rabbitmq-server-4.2.1.exe"
-}
 
 $script:RabbitMqBasePath = "C:\RabbitMQ"
 $script:ManageFirewallRules = $true
@@ -386,152 +366,189 @@ function Wait-LocalRabbitMqCliReady {
 
 }
 
-function Get-RabbitMqInstallRoots {
-
-    $roots = New-Object System.Collections.Generic.List[string]
-
-    foreach ($rabbitMqServerPath in @(
-        $env:RABBITMQ_SERVER,
-        [Environment]::GetEnvironmentVariable("RABBITMQ_SERVER", "Machine"),
-        [Environment]::GetEnvironmentVariable("RABBITMQ_SERVER", "User")
-    )) {
-        if (-not [string]::IsNullOrWhiteSpace($rabbitMqServerPath)) {
-            $roots.Add($rabbitMqServerPath.TrimEnd('\'))
-        }
-    }
-
-    foreach ($programFilesPath in @(
-        $env:ProgramFiles,
-        ${env:ProgramFiles(x86)},
-        $env:ProgramW6432,
-        [Environment]::GetEnvironmentVariable("ProgramFiles", "Machine"),
-        [Environment]::GetEnvironmentVariable("ProgramFiles(x86)", "Machine"),
-        [Environment]::GetEnvironmentVariable("ProgramW6432", "Machine")
-    )) {
-        if (-not [string]::IsNullOrWhiteSpace($programFilesPath)) {
-            $roots.Add((Join-Path $programFilesPath "RabbitMQ Server"))
-        }
-    }
-
-    try {
-        $rabbitMqService = Get-CimInstance -ClassName Win32_Service -Filter "Name='RabbitMQ'" -ErrorAction Stop
-        if ($rabbitMqService -and -not [string]::IsNullOrWhiteSpace($rabbitMqService.PathName)) {
-            $serviceCommandPath = $rabbitMqService.PathName.Trim()
-            if ($serviceCommandPath.StartsWith('"')) {
-                $serviceCommandPath = $serviceCommandPath.Trim('"')
-            }
-            else {
-                $serviceCommandPath = ($serviceCommandPath -split '\s+')[0]
-            }
-
-            $serviceCommandDirectory = Split-Path -Path $serviceCommandPath -Parent
-            if (-not [string]::IsNullOrWhiteSpace($serviceCommandDirectory)) {
-                $roots.Add($serviceCommandDirectory)
-                $roots.Add((Split-Path -Path $serviceCommandDirectory -Parent))
-            }
-        }
-    }
-    catch {
-    }
-
-    $uninstallRegistryPaths = @(
-        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
-        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
-    )
-
-    foreach ($registryPath in $uninstallRegistryPaths) {
-        try {
-            $entries = Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue |
-                Where-Object {
-                    $_.DisplayName -like "RabbitMQ Server*" -or $_.DisplayName -like "RabbitMQ*"
-                }
-
-            foreach ($entry in $entries) {
-                foreach ($candidate in @($entry.InstallLocation, $entry.DisplayIcon, $entry.UninstallString)) {
-                    if ([string]::IsNullOrWhiteSpace($candidate)) {
-                        continue
-                    }
-
-                    $normalizedCandidate = [string]$candidate
-                    if ($normalizedCandidate.StartsWith('"')) {
-                        $normalizedCandidate = $normalizedCandidate.Trim('"')
-                    }
-                    else {
-                        $normalizedCandidate = ($normalizedCandidate -split '\s+/|\s+-|\s+')[0]
-                    }
-
-                    if ([string]::IsNullOrWhiteSpace($normalizedCandidate)) {
-                        continue
-                    }
-
-                    if (Test-Path -LiteralPath $normalizedCandidate -PathType Leaf) {
-                        $normalizedCandidate = Split-Path -Path $normalizedCandidate -Parent
-                    }
-
-                    if (-not [string]::IsNullOrWhiteSpace($normalizedCandidate)) {
-                        $roots.Add($normalizedCandidate.TrimEnd('\'))
-                        try {
-                            $roots.Add((Split-Path -Path $normalizedCandidate -Parent))
-                        }
-                        catch {
-                        }
-                    }
-                }
-            }
-        }
-        catch {
-        }
-    }
-
-    try {
-        $fixedDrives = Get-CimInstance -ClassName Win32_LogicalDisk -Filter "DriveType=3" -ErrorAction Stop
-        foreach ($drive in $fixedDrives) {
-            if (-not [string]::IsNullOrWhiteSpace($drive.DeviceID)) {
-                $roots.Add((Join-Path $drive.DeviceID "Program Files\RabbitMQ Server"))
-                $roots.Add((Join-Path $drive.DeviceID "Program Files (x86)\RabbitMQ Server"))
-            }
-        }
-    }
-    catch {
-    }
-
-    return @(
-        $roots |
-        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-        ForEach-Object { $_.TrimEnd('\') } |
-        Select-Object -Unique |
-        Where-Object { Test-Path -LiteralPath $_ }
-    )
-}
-
+# Test-ResolveRabbitMqCli.ps1
+ 
 function Resolve-RabbitMqCliPath {
     param(
         [Parameter(Mandatory)]
         [string]$CommandName
     )
-
+ 
+    Write-Host ""
+    Write-Host "=== RabbitMQ CLI Resolver ===" -ForegroundColor Cyan
+    Write-Host "Searching for: $CommandName"
+    Write-Host ""
+ 
+    #
+    # 1. PATH lookup
+    #
+    Write-Host "[1] Checking PATH..." -ForegroundColor Yellow
+ 
     $candidates = @(
-        (Get-Command "$CommandName.cmd" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1),
         (Get-Command "$CommandName.bat" -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1),
         (Get-Command $CommandName -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source -First 1)
     ) | Where-Object { $_ }
-
+ 
     if ($candidates) {
+        Write-Host "[OK] Found via PATH" -ForegroundColor Green
         return $candidates[0]
     }
-
-    foreach ($rabbitRoot in Get-RabbitMqInstallRoots) {
-        $match = @(
-            Get-ChildItem -Path $rabbitRoot -Recurse -File -Filter "$CommandName.cmd" -ErrorAction SilentlyContinue
-            Get-ChildItem -Path $rabbitRoot -Recurse -File -Filter "$CommandName.bat" -ErrorAction SilentlyContinue
-        ) | Select-Object -ExpandProperty FullName -First 1
-
-        if ($match) {
-            return $match
+ 
+    #
+    # 2. Registry uninstall lookup
+    #
+    Write-Host "[2] Checking installed applications registry..." -ForegroundColor Yellow
+ 
+    $uninstallPaths = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+ 
+    foreach ($regPath in $uninstallPaths) {
+ 
+        $rabbitInstall = Get-ItemProperty $regPath -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.DisplayName -match "RabbitMQ"
+            } |
+            Select-Object -First 1
+ 
+        if ($rabbitInstall) {
+ 
+            Write-Host "Found RabbitMQ install entry:"
+            Write-Host "  DisplayName    : $($rabbitInstall.DisplayName)"
+            Write-Host "  InstallLocation: $($rabbitInstall.InstallLocation)"
+            Write-Host ""
+ 
+            if ($rabbitInstall.InstallLocation) {
+ 
+                $match = Get-ChildItem `
+                    -Path $rabbitInstall.InstallLocation `
+                    -Recurse `
+                    -File `
+                    -Filter "$CommandName.bat" `
+                    -ErrorAction SilentlyContinue |
+                    Select-Object -ExpandProperty FullName -First 1
+ 
+                if ($match) {
+                    Write-Host "[OK] Found via uninstall registry" -ForegroundColor Green
+                    return $match
+                }
+            }
         }
     }
-
+ 
+    #
+    # 3. Program Files registry locations
+    #
+    Write-Host "[3] Checking Program Files registry paths..." -ForegroundColor Yellow
+ 
+    $pf = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion'
+ 
+    $programDirs = @(
+        $pf.ProgramFilesDir,
+        $pf.ProgramFilesDirx86,
+        $pf.ProgramW6432Dir
+    ) | Where-Object { $_ } | Select-Object -Unique
+ 
+    foreach ($dir in $programDirs) {
+ 
+        Write-Host "Checking: $dir"
+ 
+        $rabbitRoot = Join-Path $dir "RabbitMQ Server"
+ 
+        if (Test-Path $rabbitRoot) {
+ 
+            $match = Get-ChildItem `
+                -Path $rabbitRoot `
+                -Recurse `
+                -File `
+                -Filter "$CommandName.bat" `
+                -ErrorAction SilentlyContinue |
+                Select-Object -ExpandProperty FullName -First 1
+ 
+            if ($match) {
+                Write-Host "[OK] Found via Program Files registry path" -ForegroundColor Green
+                return $match
+            }
+        }
+    }
+ 
+    #
+    # 4. Fixed disk fallback search
+    #
+    Write-Host "[4] Scanning fixed disks..." -ForegroundColor Yellow
+ 
+    $fixedDrives = Get-CimInstance Win32_LogicalDisk |
+        Where-Object {
+            $_.DriveType -eq 3
+        }
+ 
+    foreach ($drive in $fixedDrives) {
+ 
+        Write-Host "Scanning drive: $($drive.DeviceID)"
+ 
+        $possibleRoots = @(
+            "$($drive.DeviceID)\Program Files",
+            "$($drive.DeviceID)\Program Files (x86)"
+        )
+ 
+        foreach ($root in $possibleRoots) {
+ 
+            if (Test-Path $root) {
+ 
+                Write-Host "  Searching: $root"
+ 
+                $match = Get-ChildItem `
+                    -Path $root `
+                    -Recurse `
+                    -File `
+                    -Filter "$CommandName.bat" `
+                    -ErrorAction SilentlyContinue |
+                    Select-Object -ExpandProperty FullName -First 1
+ 
+                if ($match) {
+                    Write-Host "[OK] Found via disk scan" -ForegroundColor Green
+                    return $match
+                }
+            }
+        }
+    }
+ 
     throw "RabbitMQ CLI not found: $CommandName"
+}
+ 
+#
+# TEST SECTION
+#
+ 
+try {
+ 
+    $commands = @(
+        "rabbitmqctl",
+        "rabbitmq-diagnostics",
+        "rabbitmq-service"
+    )
+ 
+    foreach ($cmd in $commands) {
+ 
+        Write-Host ""
+        Write-Host "====================================================="
+        Write-Host "TESTING: $cmd"
+        Write-Host "====================================================="
+ 
+        $result = Resolve-RabbitMqCliPath -CommandName $cmd
+ 
+        Write-Host ""
+        Write-Host "FINAL RESULT:" -ForegroundColor Cyan
+        Write-Host $result -ForegroundColor Green
+    }
+ 
+}
+catch {
+ 
+    Write-Host ""
+    Write-Host "[ERROR]" -ForegroundColor Red
+    Write-Host $_.Exception.Message
 }
 
 function Invoke-RabbitMqCli {
@@ -598,49 +615,28 @@ function New-RabbitMqTlsMaterialFromPfx {
         throw "Failed to open PFX '$PfxPath'. Verify that the file is valid and that -PfxPassword is correct."
     }
 
-    try {
-        $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
-        if (-not $rsa) {
-            throw "The PFX does not contain an RSA private key. Use certificate mode 3 with PEM files for non-RSA certificates."
-        }
+    $certPem = "-----BEGIN CERTIFICATE-----`n"
+    $certPem += [Convert]::ToBase64String($cert.RawData, [System.Base64FormattingOptions]::InsertLineBreaks)
+    $certPem += "`n-----END CERTIFICATE-----"
+    Set-Content -Path $CertPath -Value $certPem -Encoding ascii
 
-        try {
-            $keyBytes = $rsa.ExportPkcs8PrivateKey()
-        }
-        catch {
-            throw "The PFX private key could not be exported. The certificate likely uses a non-exportable or provider-restricted private key. Use an exportable PFX or certificate mode 3 with PEM files."
-        }
-
-        if (-not $keyBytes -or $keyBytes.Length -eq 0) {
-            throw "The PFX private key export returned no data. Use an exportable PFX or certificate mode 3 with PEM files."
-        }
-
-        $certPem = "-----BEGIN CERTIFICATE-----`n"
-        $certPem += [Convert]::ToBase64String($cert.RawData, [System.Base64FormattingOptions]::InsertLineBreaks)
-        $certPem += "`n-----END CERTIFICATE-----"
-
-        $keyPem = "-----BEGIN PRIVATE KEY-----`n"
-        $keyPem += [Convert]::ToBase64String($keyBytes, [System.Base64FormattingOptions]::InsertLineBreaks)
-        $keyPem += "`n-----END PRIVATE KEY-----"
-
-        Set-Content -Path $CertPath -Value $certPem -Encoding ascii -ErrorAction Stop
-        Set-Content -Path $KeyPath -Value $keyPem -Encoding ascii -ErrorAction Stop
+    $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
+    if (-not $rsa) {
+        throw "The PFX does not contain an RSA private key. Use certificate mode 3 with PEM files for non-RSA certificates."
     }
-    catch {
-        foreach ($path in @($CertPath, $KeyPath)) {
-            if (Test-Path -LiteralPath $path) {
-                Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-            }
-        }
 
-        throw
+    try {
+        $keyBytes = $rsa.ExportPkcs8PrivateKey()
     }
     finally {
-        if ($rsa) {
-            $rsa.Dispose()
-        }
+        $rsa.Dispose()
         $cert.Dispose()
     }
+
+    $keyPem = "-----BEGIN PRIVATE KEY-----`n"
+    $keyPem += [Convert]::ToBase64String($keyBytes, [System.Base64FormattingOptions]::InsertLineBreaks)
+    $keyPem += "`n-----END PRIVATE KEY-----"
+    Set-Content -Path $KeyPath -Value $keyPem -Encoding ascii
 }
 
 function Verify-RabbitCluster{
@@ -1418,23 +1414,16 @@ function Invoke-RabbitMqUninstall {
 
 function Get-RabbitMqSbinPath {
 
-    $candidates = foreach ($rabbitRoot in Get-RabbitMqInstallRoots) {
-        if ((Split-Path -Leaf $rabbitRoot) -eq "sbin" -and (Test-Path -LiteralPath $rabbitRoot)) {
-            $rabbitRoot
-            continue
-        }
-
-        if (Test-Path -LiteralPath (Join-Path $rabbitRoot "sbin")) {
-            Join-Path $rabbitRoot "sbin"
-        }
-
-        Get-ChildItem -Path $rabbitRoot -Directory -Filter "rabbitmq_server-*" -ErrorAction SilentlyContinue |
-            Sort-Object Name -Descending |
-            ForEach-Object { Join-Path $_.FullName "sbin" } |
-            Where-Object { Test-Path -LiteralPath $_ }
+    $rabbitRoot = Join-Path $env:ProgramFiles "RabbitMQ Server"
+    if (-not (Test-Path -LiteralPath $rabbitRoot)) {
+        return $null
     }
 
-    return @($candidates | Select-Object -Unique | Select-Object -First 1)
+    return Get-ChildItem -Path $rabbitRoot -Directory -Filter "rabbitmq_server-*" -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending |
+        ForEach-Object { Join-Path $_.FullName "sbin" } |
+        Where-Object { Test-Path -LiteralPath $_ } |
+        Select-Object -First 1
 }
 
 function Get-RabbitMqBasePath {
@@ -1524,17 +1513,6 @@ function Add-RabbitMqSbinToPath {
 
     Set-MachinePathEntries -Entries ($filteredEntries + $sbinPath)
     Write-Host "Updated machine PATH to current RabbitMQ sbin path: $sbinPath"
-}
-
-function Sync-RabbitMqSbinPathSafely {
-
-    try {
-        Add-RabbitMqSbinToPath
-    }
-    catch {
-        Write-Warning "Failed to update RabbitMQ sbin in machine PATH: $($_.Exception.Message)"
-        Write-Warning "Continuing because RabbitMQ CLI resolution does not rely only on PATH."
-    }
 }
 
 function Remove-RabbitMqSbinFromPath {
@@ -1900,13 +1878,13 @@ if($DeployMode -eq "6"){
     -AdminCredential $credentialRabbitMQAdmin `
     -Verbose
 
-    Sync-RabbitMqSbinPathSafely
+    Add-RabbitMqSbinToPath
 
 }
 elseif($ReapplyOnly){
 
     Write-Host "Reapply-only mode selected; skipping install/upgrade"
-    Sync-RabbitMqSbinPathSafely
+    Add-RabbitMqSbinToPath
 
 }
 elseif($DeployMode -eq "3"){
@@ -1919,7 +1897,7 @@ elseif($DeployMode -eq "3"){
 
     Start-Process $OfflineRabbitMQInstallerPath -ArgumentList "/S" -Wait
 
-    Sync-RabbitMqSbinPathSafely
+    Add-RabbitMqSbinToPath
 
     Start-Service RabbitMQ
 
@@ -1939,7 +1917,7 @@ elseif(-not $RabbitService){
     -AdminCredential $credentialRabbitMQAdmin `
     -Verbose
 
-    Sync-RabbitMqSbinPathSafely
+    Add-RabbitMqSbinToPath
 
 }
 else{
