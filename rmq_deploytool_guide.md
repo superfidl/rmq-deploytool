@@ -1503,6 +1503,9 @@ Get-Content C:\Windows\.erlang.cookie
   -ErlangCookieValue 'GOLRHLWTJDVTUGCDVHOD'
 ```
 
+## Add user from command line
+
+
 ## Notes And Recommendations
 
 - Always run as Administrator
