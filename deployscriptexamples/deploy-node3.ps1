@@ -1,3 +1,4 @@
+# see deploy-node1.ps1 notes
 .\rmq_deploytool.ps1 `
   -DeployMode 2 `
   -JoinCluster `
